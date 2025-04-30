@@ -4,7 +4,7 @@ It's a Knife Fight at B Long Pearl
 
 # TL;DR
 Ever play Valorant?
-If not well this is a knife fight at mid
+If not well this is a knife fight at mid.
 Well also at B Long Pearl.
-And A Showers Bind
-Well that's because Bind doesn't have mid
+And A Showers Bind.
+Well that's because Bind doesn't have mid.
