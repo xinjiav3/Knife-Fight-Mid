@@ -9,3 +9,5 @@ gem "execjs", "~> 2.8"
 gem 'faraday-retry'
 
 gem 'jekyll'
+
+gem "nokogiri", "1.18.2"
