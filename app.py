@@ -7,6 +7,9 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config['SECRET_KEY'] = 'your-secret-key'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+if __name__ == '__main__':
+    socketio.run(app, host='localhost', port=5000, debug=False)
+
 # Store active games
 games = {}
 
