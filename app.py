@@ -1,7 +1,6 @@
 from flask import Flask, render_template, send_from_directory, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
-import random
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config['SECRET_KEY'] = 'your-secret-key'
@@ -23,6 +22,11 @@ def serve_static(path):
     """Serve static files"""
     return send_from_directory('static', path)
 
+@app.route('/navigation/<path:path>')
+def serve_navigation(path):
+    """Serve navigation files"""
+    return send_from_directory('navigation', path)
+
 # Socket.IO - Basic connection events
 @socketio.on('connect')
 def handle_connect():
@@ -36,11 +40,12 @@ def handle_disconnect():
         game = games[game_id]
         for player_id in list(game['players'].keys()):
             if request.sid == game['players'][player_id]['sid']:
-                del game['players'][player_id]
-                emit('player_left', {'player_id': player_id}, to=game_id)
+                # Mark player as disconnected but don't remove them yet
+                games[game_id]['players'][player_id]['connected'] = False
+                emit('player_disconnected', {'player_id': player_id}, to=game_id)
                 
-                # If no players remain, clean up the game
-                if not game['players']:
+                # If no players remain connected, clean up the game after a delay
+                if not any(player['connected'] for player in game['players'].values()):
                     del games[game_id]
                 break
 
@@ -50,10 +55,22 @@ def handle_create_game(data):
     player_id = data['player_id']
     player_name = data.get('player_name', f'Player {player_id}')
     
-    # Generate a unique game ID
-    game_id = f"game_{len(games) + 1}"
+    # Check if a custom game ID was provided
+    custom_game_id = data.get('custom_game_id', '')
     
-    # Create basic game state
+    if custom_game_id and custom_game_id in games:
+        # Game ID already exists
+        emit('error', {'message': 'Game ID already in use. Please try another.'})
+        return
+    
+    # Generate a unique game ID or use custom one
+    if custom_game_id:
+        game_id = custom_game_id
+    else:
+        # Generate a random game ID if none was provided
+        game_id = f"game_{len(games) + 1}"
+    
+    # Create game state
     games[game_id] = {
         'players': {
             player_id: {
@@ -61,10 +78,9 @@ def handle_create_game(data):
                 'name': player_name,
                 'x': 100,
                 'y': 300,
-                'health': 100,
                 'color': '#FF5733',  # First player color
-                'direction': 1,  # 1 = right, -1 = left
-                'attacking': False
+                'direction': 1,      # 1 = right, -1 = left
+                'connected': True
             }
         },
         'state': 'waiting'  # waiting, playing, finished
@@ -87,33 +103,42 @@ def handle_join_game(data):
     player_name = data.get('player_name', f'Player {player_id}')
     game_id = data['game_id']
     
-    if game_id in games and len(games[game_id]['players']) < 2:
-        # Add player to the game
-        games[game_id]['players'][player_id] = {
-            'sid': request.sid,
-            'name': player_name,
-            'x': 600,
-            'y': 300,
-            'health': 100,
-            'color': '#33A1FF',  # Second player color
-            'direction': -1,  # 1 = right, -1 = left
-            'attacking': False
-        }
-        
-        # Set game state to playing
-        games[game_id]['state'] = 'playing'
-        
-        # Join the room
-        join_room(game_id)
-        
-        # Start the game for all players
-        emit('game_start', {
-            'game_id': game_id,
-            'game_data': games[game_id]
-        }, to=game_id)
+    if game_id in games:
+        if len(games[game_id]['players']) < 2:
+            # Add player to the game
+            games[game_id]['players'][player_id] = {
+                'sid': request.sid,
+                'name': player_name,
+                'x': 600,
+                'y': 300,
+                'color': '#33A1FF',  # Second player color
+                'direction': -1,     # 1 = right, -1 = left
+                'connected': True
+            }
+            
+            # Set game state to playing
+            games[game_id]['state'] = 'playing'
+            
+            # Join the room
+            join_room(game_id)
+            
+            # Notify all players that someone joined
+            emit('player_joined', {
+                'player_id': player_id,
+                'player_name': player_name
+            }, to=game_id)
+            
+            # Start the game for all players
+            emit('game_start', {
+                'game_id': game_id,
+                'game_data': games[game_id]
+            }, to=game_id)
+        else:
+            # Game is full
+            emit('error', {'message': 'Game is full'})
     else:
-        # Game not found or full
-        emit('error', {'message': 'Game not found or full'})
+        # Game not found
+        emit('error', {'message': 'Game not found'})
 
 @socketio.on('player_update')
 def handle_player_update(data):
@@ -134,58 +159,6 @@ def handle_player_update(data):
             'state': update_data
         }, to=game_id, include_self=False)
 
-@socketio.on('attack')
-def handle_attack(data):
-    """Handle a player's attack"""
-    game_id = data['game_id']
-    attacker_id = data['player_id']
-    
-    if game_id in games and attacker_id in games[game_id]['players']:
-        # Get attacker position
-        attacker = games[game_id]['players'][attacker_id]
-        attacker['attacking'] = True
-        
-        # Check for hit on other player
-        for player_id, player in games[game_id]['players'].items():
-            if player_id != attacker_id:
-                # Simple hit detection - In a real game, you'd want better collision detection
-                hit = False
-                attack_range = 60
-                
-                # Checking if other player is in attack range based on direction
-                if attacker['direction'] > 0:  # Facing right
-                    if player['x'] > attacker['x'] and player['x'] < attacker['x'] + attack_range:
-                        hit = True
-                else:  # Facing left
-                    if player['x'] < attacker['x'] and player['x'] > attacker['x'] - attack_range:
-                        hit = True
-                
-                # If hit, reduce health
-                if hit:
-                    player['health'] -= 20
-                    
-                    # Broadcast hit
-                    emit('player_hit', {
-                        'player_id': player_id,
-                        'health': player['health'],
-                        'attacker_id': attacker_id
-                    }, to=game_id)
-                    
-                    # Check for game over
-                    if player['health'] <= 0:
-                        emit('game_over', {
-                            'winner_id': attacker_id,
-                            'winner_name': attacker['name']
-                        }, to=game_id)
-                        games[game_id]['state'] = 'finished'
-                
-                break
-        
-        # Broadcast attack animation
-        emit('player_attack', {
-            'player_id': attacker_id
-        }, to=game_id)
-
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 5001))  # Changed to 5001 to avoid conflicts
     socketio.run(app, host='0.0.0.0', port=port, debug=True)
